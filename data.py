@@ -9,7 +9,7 @@ from typing import Any, Optional, Tuple
 
 import pandas as pd
 from sklearn.model_selection import (
-    StratifiedGroupKFold,
+    KFold,
 )
 from transformers import (
     AutoTokenizer,
@@ -19,18 +19,12 @@ from transformers import (
 from datasets import Dataset, load_from_disk
 
 
-def get_folds(
-    orders_df, ancestors_df, k_folds=5, stratify_on="length", groups="ancestor_id"
-):
+def get_folds(df, k_folds=5):
 
-    merged = orders_df.merge(ancestors_df, on="id", how="left")
-
-    sgkf = StratifiedGroupKFold(n_splits=k_folds)
+    kf = KFold(n_splits=k_folds)
     return [
         val_idx
-        for _, val_idx in sgkf.split(
-            merged, y=merged[stratify_on].astype(str), groups=merged[groups]
-        )
+        for _, val_idx in kf.split(df)
     ]
 
 
@@ -182,6 +176,8 @@ class TokenClassificationDataModule:
             self.ds.save_to_disk(f"{self.cfg['output']}.dataset")
 
             print("Saving dataset to disk:", self.cfg["output"])
+        
+        self.folds = get_folds(self.ds["labels"])
 
     def get_train_dataset(self, fold):
         idxs = list(chain(*[i for f, i in enumerate(self.fold_idxs) if f != fold]))
