@@ -27,7 +27,7 @@ class FPETokenModel(PreTrainedModel):
             self.ln = nn.LayerNorm(config.hidden_size)
             self._init_weights(self.ln)
 
-        self.classifier = nn.Linear(config.hidden_size, 1)
+        self.classifier = nn.Linear(config.hidden_size, 3)
         self._init_weights(self.classifier)
 
         self.loss_fct = nn.CrossEntropyLoss()
@@ -53,7 +53,7 @@ class FPETokenModel(PreTrainedModel):
             **kwargs,
         )[0]
 
-        mask = torch.logical_or(*[input_ids == id_ for id_ in self.cls_token_ids])
+        mask = torch.isin(input_ids, torch.tensor(self.cls_token_ids, device=input_ids.device))
         # import pdb; pdb.set_trace()
         loss = None
         if labels is not None:
@@ -65,10 +65,9 @@ class FPETokenModel(PreTrainedModel):
                     outputs, self.classifier, labels, self.loss_fct, self.ln, mask
                 )
             else:
-
+                
                 logits = self.classifier(self.ln(self.dropout(outputs)))
-
-                loss = self.loss_fct(logits[mask].view(-1), labels.view(-1))
+                loss = self.loss_fct(logits[mask], labels)
 
         else:
             logits = self.classifier(self.ln(outputs))

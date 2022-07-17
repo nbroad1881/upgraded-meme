@@ -79,10 +79,11 @@ def find_positions(data):
                 if m.start() >= idx:
                     break
         elif len(matches) == 0:
-            idxs.append("?")  # will filter out later
+            idxs.append([-1])
+            continue  # will filter out later
         else:
             m = matches[0]
-        idxs.append((m.start(), m.end()))
+        idxs.append([m.start(), m.end()])
 
         idx = m.start()
 
@@ -138,15 +139,17 @@ class TokenClassificationDataModule:
 
             self.train_df = train_df.merge(text_df, on="essay_id", how="left")
 
-        self.cls_tkn_map = {label: f"[CLS_{label.upper()}" for label in disc_types}
+        self.cls_tokens_map = {label: f"[CLS_{label.upper()}]" for label in disc_types}
+        self.end_tokens_map = {label: f"[END_{label.upper()}]" for label in disc_types}
+        
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.cfg["model_name_or_path"])
         self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": list(self.cls_tkn_map.values())}
+            {"additional_special_tokens": list(self.cls_tokens_map.values())+list(self.end_tokens_map.values())}
         )
         self.cls_id_map = {
             label: self.tokenizer.encode(tkn)[1]
-            for label, tkn in self.cls_tkn_map.items()
+            for label, tkn in self.cls_tokens_map.items()
         }
 
     def prepare_datasets(self):
@@ -177,7 +180,7 @@ class TokenClassificationDataModule:
 
             print("Saving dataset to disk:", self.cfg["output"])
         
-        self.folds = get_folds(self.ds["labels"])
+        self.fold_idxs = get_folds(self.ds["labels"])
 
     def get_train_dataset(self, fold):
         idxs = list(chain(*[i for f, i in enumerate(self.fold_idxs) if f != fold]))
@@ -201,7 +204,7 @@ class TokenClassificationDataModule:
             example["discourse_effectiveness"],
         )
         for idxs, disc_type, disc_effect in zipped:
-            if idxs == "?":
+            if idxs == [-1]:
                 continue
 
             s, e = idxs
@@ -210,17 +213,18 @@ class TokenClassificationDataModule:
                 chunks.append(text[prev:s])
                 prev = s
             if s == prev:
-                chunks.append(self.cls_tkn_map[disc_type])
+                chunks.append(self.cls_tokens_map[disc_type])
                 chunks.append(text[s:e])
-                chunks.append(self.tokenzier.sep_token)
+                chunks.append(self.end_tokens_map[disc_type])
             prev = e
 
             labels.append(self.label2idx[disc_effect])
 
         tokenized = self.tokenizer(
-            text,
+            " ".join(chunks),
             padding=False,
-            truncation=False,
+            truncation=True,
+            max_length=self.cfg["max_length"],
             add_special_tokens=True,
         )
 
