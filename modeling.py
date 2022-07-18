@@ -32,7 +32,7 @@ class FPETokenModel(PreTrainedModel):
 
         self.loss_fct = nn.CrossEntropyLoss()
 
-        self.cls_token_ids = list(config.cls_token_map.values())
+        self.cls_token_ids = config.cls_tokens
 
     def forward(
         self,
@@ -54,11 +54,12 @@ class FPETokenModel(PreTrainedModel):
         )[0]
 
         mask = torch.isin(input_ids, torch.tensor(self.cls_token_ids, device=input_ids.device))
-        # import pdb; pdb.set_trace()
+
         loss = None
         if labels is not None:
 
             labels = labels[labels > -1]
+        
 
             if self.config.multisample_dropout:
                 loss, logits = self.multisample_dropout(
@@ -71,8 +72,6 @@ class FPETokenModel(PreTrainedModel):
 
         else:
             logits = self.classifier(self.ln(outputs))
-
-        # import pdb; pdb.set_trace()
 
         return ClassifierOutput(
             loss=loss,
@@ -128,7 +127,7 @@ class MultiSampleDropout(nn.Module):
 
         logits = [linear(layer_nm(d(hidden_states))) for d in self.dropouts]
 
-        losses = [loss_fn(log[mask].view(-1), labels.view(-1)) for log in logits]
+        losses = [loss_fn(log[mask], labels) for log in logits]
 
         logits = torch.mean(torch.stack(logits, dim=0), dim=0)
         loss = torch.mean(torch.stack(losses, dim=0), dim=0)
