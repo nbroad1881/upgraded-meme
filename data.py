@@ -213,9 +213,11 @@ class TokenClassificationDataModule:
                 chunks.append(text[prev:s])
                 prev = s
             if s == prev:
+                # chunks.append(self.tokenizer.cls_token)
                 chunks.append(self.cls_tokens_map[disc_type])
                 chunks.append(text[s:e])
                 chunks.append(self.end_tokens_map[disc_type])
+                # chunks.append(self.tokenizer.sep_token)
             prev = e
 
             labels.append(self.label2idx[disc_effect])
@@ -227,8 +229,15 @@ class TokenClassificationDataModule:
             max_length=self.cfg["max_length"],
             add_special_tokens=True,
         )
-
+        
+        for k in tokenized.keys():
+            if k not in {"input_ids", "attention_mask"}:
+                tokenized.pop(k)
+        
+        tokenized = {k:v[1:] for k, v in tokenized.items()}
+        
         tokenized["labels"] = labels
+
 
         return tokenized
 
