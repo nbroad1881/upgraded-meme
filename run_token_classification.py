@@ -118,7 +118,7 @@ if __name__ == "__main__":
                 # "layer_norm_eps": cfg["layer_norm_eps"],
                 "run_start": str(datetime.datetime.utcnow()),
                 "output_layer_norm": cfg["output_layer_norm"],
-                "cls_token_map": dm.cls_id_map,
+                "cls_tokens": list(dm.cls_id_map.values()),#[dm.tokenizer.cls_token_id]
             }
         )
 
@@ -153,6 +153,7 @@ if __name__ == "__main__":
             data_collator=collator,
             # optimizers=(optimizer, scheduler),
         )
+        
 
         trainer.remove_callback(WandbCallback)
 
