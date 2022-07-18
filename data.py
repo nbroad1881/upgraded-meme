@@ -236,7 +236,15 @@ class TokenClassificationDataModule:
         
         tokenized = {k:v[1:] for k, v in tokenized.items()}
         
-        tokenized["labels"] = labels
+        idx = 0
+        final_labels = []
+        for id in tokenized["input_ids"]:
+            if id in self.cls_id_map.values():
+                final_labels.append(labels[idx])
+                idx += 1
+            else:
+                final_labels.append(-100)
+        tokenized["labels"] = final_labels
 
 
         return tokenized

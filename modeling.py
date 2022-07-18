@@ -53,22 +53,19 @@ class FPETokenModel(PreTrainedModel):
             **kwargs,
         )[0]
 
-        mask = torch.isin(input_ids, torch.tensor(self.cls_token_ids, device=input_ids.device))
 
         loss = None
         if labels is not None:
-
-            labels = labels[labels > -1]
-        
+       
 
             if self.config.multisample_dropout:
                 loss, logits = self.multisample_dropout(
-                    outputs, self.classifier, labels, self.loss_fct, self.ln, mask
+                    outputs, self.classifier, labels, self.loss_fct, self.ln
                 )
             else:
                 
                 logits = self.classifier(self.ln(self.dropout(outputs)))
-                loss = self.loss_fct(logits[mask], labels)
+                loss = self.loss_fct(logits.view(-1, 3), labels.view(-1))
 
         else:
             logits = self.classifier(self.ln(outputs))
@@ -122,12 +119,12 @@ class MultiSampleDropout(nn.Module):
 
         self.dropouts = [nn.Dropout(p=p) for p in dropout_probs]
 
-    def forward(self, hidden_states, linear, labels, loss_fn, layer_nm, mask):
+    def forward(self, hidden_states, linear, labels, loss_fn, layer_nm):
         # if not using output layer_nm, pass nn.Identity()
 
         logits = [linear(layer_nm(d(hidden_states))) for d in self.dropouts]
 
-        losses = [loss_fn(log[mask], labels) for log in logits]
+        losses = [loss_fn(log.view(-1, 3), labels.view(-1)) for log in logits]
 
         logits = torch.mean(torch.stack(logits, dim=0), dim=0)
         loss = torch.mean(torch.stack(losses, dim=0), dim=0)
