@@ -171,7 +171,7 @@ class TokenClassificationDataModule:
             grouped["text"] = [g[0] for g in grouped["text"]]
 
             self.ds = Dataset.from_pandas(grouped)
-
+            
             self.ds = self.ds.map(
                 self.tokenize,
                 batched=False,
@@ -185,7 +185,10 @@ class TokenClassificationDataModule:
                     batched=True,
                     num_proc=self.cfg["num_proc"],
                     desc="chunking",
+                    remove_columns=self.ds.column_names
                 )
+                
+            import pdb; pdb.set_trace()
 
             self.ds.save_to_disk(f"{self.cfg['output']}.dataset")
 
@@ -307,7 +310,13 @@ class TokenClassificationDataModule:
         2max_length-2stride:3max_length-2stride
         """
         
-        to_return = {k: [] for k in sequences.keys()}
+        cols = [
+            "input_ids",
+            "attention_mask",
+            "labels",
+            "indicator",
+        ]
+        to_return = {k: [] for k in cols}
 
         for ids, mask, labels, indicator in zip(
             sequences["input_ids"],
@@ -315,7 +324,7 @@ class TokenClassificationDataModule:
             sequences["labels"],
             sequences["indicator"]
         ):
-            chunked = {k: [] for k in sequences.keys()}
+            chunked = {k: [] for k in cols}
 
             max_len = self.cfg["max_length"]-2
             stride = self.cfg["stride"]
@@ -372,10 +381,10 @@ class TokenClassificationDataModule:
                     break
                 end = start + max_len
                     
-            for k in chunked.keys():
+            for k in cols:
                 to_return[k].extend(chunked[k])
 
-        return chunked
+        return to_return
 
 
 @dataclass
