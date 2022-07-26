@@ -8,6 +8,9 @@ from typing import List, Optional
 
 import torch
 import pandas as pd
+import numpy as np
+from sklearn.metrics import log_loss
+from scipy.special import softmax
 
 from transformers import (
     get_scheduler,
@@ -327,3 +330,40 @@ def create_model_card(config, metrics, wandb_run_id):
     )
 
     
+def compute_metrics(predictions, indicators, average_span_preds):
+    
+    
+    preds, labels = predictions
+    if not average_span_preds:
+        mask = labels != -100
+        preds = preds[mask]
+        labels = labels[mask]
+        return {
+            "logloss": log_loss(labels, softmax(preds, axis=-1))
+        }
+    
+    
+    true_labels = []
+    avg_preds = []
+    for idx, indicator in enumerate(indicators):
+        
+        # indicator will have the same value for a single span
+        # it will not be padded, so we need to truncate the 
+        # preds and labels to be the same length
+        vals = list(set(indicator))
+        p = preds[idx][:len(indicator)]
+        l = labels[idx][:len(indicator)]
+        temp_indicator = np.array(indicator)
+        
+        
+        for v in vals:
+            if v == -100:
+                continue
+            # mask out everything except for one span
+            mask = temp_indicator == v
+            avg_preds.append(p[mask].mean(axis=0))
+            true_labels.append(l[mask][0])    
+        
+    return {
+        "logloss": log_loss(np.array(true_labels), softmax(np.vstack(avg_preds), axis=-1))
+    }
