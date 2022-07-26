@@ -1,6 +1,7 @@
 import os
 import datetime
 import argparse
+from functools import partial
 
 import wandb
 import torch
@@ -21,6 +22,7 @@ from utils import (
     reinit_model_weights,
     create_optimizer,
     create_scheduler,
+    compute_metrics,
     push_to_hub,
 )
 from data import (
@@ -80,12 +82,12 @@ if __name__ == "__main__":
 
         # Callbacks
         wb_callback = NewWandbCB(cfg)
-        metric_to_track = "eval_loss"
+        metric_to_track = "eval_logloss"
         save_callback = SaveCallback(
             score_threshold=cfg["score_threshold"],
             metric_name=metric_to_track,
             weights_only=True,
-            lower_is_better=True,
+            lower_is_better=cfg["lower_is_better"],
         )
 
         callbacks = [wb_callback, save_callback]
@@ -118,7 +120,9 @@ if __name__ == "__main__":
                 # "layer_norm_eps": cfg["layer_norm_eps"],
                 "run_start": str(datetime.datetime.utcnow()),
                 "output_layer_norm": cfg["output_layer_norm"],
-                "cls_tokens": list(dm.cls_id_map.values()),#[dm.tokenizer.cls_token_id]
+                "cls_tokens": list(
+                    dm.cls_id_map.values()
+                ),  # [dm.tokenizer.cls_token_id]
             }
         )
 
@@ -143,6 +147,12 @@ if __name__ == "__main__":
             tokenizer=dm.tokenizer, pad_to_multiple_of=cfg["pad_multiple"], padding=True
         )
 
+        comp_metrics = partial(
+            compute_metrics,
+            indicators=eval_dataset["indicator"],
+            average_span_preds=cfg["average_span_preds"],
+        )
+
         trainer = Trainer(
             model=model,
             args=args,
@@ -151,9 +161,9 @@ if __name__ == "__main__":
             tokenizer=dm.tokenizer,
             callbacks=callbacks,
             data_collator=collator,
+            compute_metrics=comp_metrics,
             # optimizers=(optimizer, scheduler),
         )
-        
 
         trainer.remove_callback(WandbCallback)
 
