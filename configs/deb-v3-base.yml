@@ -70,11 +70,11 @@ training_arguments:
   seed: 18
 
 # hyperparams
-  per_device_train_batch_size: 8
+  per_device_train_batch_size: 16
   gradient_accumulation_steps: 1
   gradient_checkpointing: no
   group_by_length: no
-  learning_rate: 7e-6
+  learning_rate: 3e-5
   weight_decay: .01
 
 # schedule + steps
