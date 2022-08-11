@@ -1,5 +1,6 @@
 import re
 import codecs
+import random
 from functools import partial
 from pathlib import Path
 from itertools import chain
@@ -10,11 +11,10 @@ from typing import Any, Optional, Tuple
 import pandas as pd
 from sklearn.model_selection import (
     KFold,
+    train_test_split,
 )
 from transformers import (
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
-    PreTrainedTokenizerBase,
 )
 from datasets import Dataset, load_from_disk
 
@@ -171,7 +171,7 @@ class TokenClassificationDataModule:
             grouped["text"] = [g[0] for g in grouped["text"]]
 
             self.ds = Dataset.from_pandas(grouped)
-            
+
             self.ds = self.ds.map(
                 self.tokenize,
                 batched=False,
@@ -185,10 +185,12 @@ class TokenClassificationDataModule:
                     batched=True,
                     num_proc=self.cfg["num_proc"],
                     desc="chunking",
-                    remove_columns=self.ds.column_names
+                    remove_columns=self.ds.column_names,
                 )
-                
-            import pdb; pdb.set_trace()
+
+            import pdb
+
+            pdb.set_trace()
 
             self.ds.save_to_disk(f"{self.cfg['output']}.dataset")
 
@@ -309,7 +311,7 @@ class TokenClassificationDataModule:
         max_length-stride:2max_length-stride
         2max_length-2stride:3max_length-2stride
         """
-        
+
         cols = [
             "input_ids",
             "attention_mask",
@@ -322,23 +324,23 @@ class TokenClassificationDataModule:
             sequences["input_ids"],
             sequences["attention_mask"],
             sequences["labels"],
-            sequences["indicator"]
+            sequences["indicator"],
         ):
             chunked = {k: [] for k in cols}
 
-            max_len = self.cfg["max_length"]-2
+            max_len = self.cfg["max_length"] - 2
             stride = self.cfg["stride"]
 
             start = 0
-            end = start+max_len
+            end = start + max_len
             while True:
 
                 prepend = {
-                        "input_ids": [self.tokenizer.cls_token_id],
-                        "attention_mask": [1],
-                        "labels": [-100],
-                        "indicator": [-100],
-                    }
+                    "input_ids": [self.tokenizer.cls_token_id],
+                    "attention_mask": [1],
+                    "labels": [-100],
+                    "indicator": [-100],
+                }
                 append = {
                     "input_ids": [self.tokenizer.eos_token_id],
                     "attention_mask": [1],
@@ -351,7 +353,7 @@ class TokenClassificationDataModule:
                         "input_ids": [],
                         "attention_mask": [],
                         "labels": [],
-                        "indicator": []
+                        "indicator": [],
                     }
                 if end >= len(ids):
                     # There is already an EOS token
@@ -359,15 +361,16 @@ class TokenClassificationDataModule:
                         "input_ids": [],
                         "attention_mask": [],
                         "labels": [],
-                        "indicator": []
+                        "indicator": [],
                     }
 
-            
                 chunked["input_ids"].append(
                     prepend["input_ids"] + ids[start:end] + append["input_ids"]
                 )
                 chunked["attention_mask"].append(
-                    prepend["attention_mask"] + mask[start:end] + append["attention_mask"]
+                    prepend["attention_mask"]
+                    + mask[start:end]
+                    + append["attention_mask"]
                 )
                 chunked["labels"].append(
                     prepend["labels"] + labels[start:end] + append["labels"]
@@ -380,7 +383,7 @@ class TokenClassificationDataModule:
                 if end >= len(ids):
                     break
                 end = start + max_len
-                    
+
             for k in cols:
                 to_return[k].extend(chunked[k])
 
@@ -436,41 +439,19 @@ class ComparisonDataModule:
 
             self.train_df = train_df.merge(text_df, on="essay_id", how="left")
 
-        self.cls_tokens_map = {label: f"[CLS_{label.upper()}]" for label in disc_types}
-        self.end_tokens_map = {label: f"[END_{label.upper()}]" for label in disc_types}
-
         self.tokenizer = AutoTokenizer.from_pretrained(self.cfg["model_name_or_path"])
-        self.tokenizer.add_special_tokens(
-            {
-                "additional_special_tokens": list(self.cls_tokens_map.values())
-                + list(self.end_tokens_map.values())
-            }
-        )
-        self.cls_id_map = {
-            label: self.tokenizer.encode(tkn)[1]
-            for label, tkn in self.cls_tokens_map.items()
-        }
-        self.end_id_map = {
-            label: self.tokenizer.encode(tkn)[1]
-            for label, tkn in self.end_tokens_map.items()
-        }
 
     def prepare_datasets(self):
 
         if self.cfg["load_from_disk"] is None:
 
-            grouped = self.train_df.groupby(["essay_id"]).agg(list)
+            # reserve ~100 files to compare
+            # split remaining 80-20
+            # only look at discourse_text
 
-            positions = grouped[["discourse_text", "text"]].apply(
-                find_positions, axis=1
+            self.train_df, self.reserved_df = train_test_split(
+                self.train_df, test_size=0.1, stratify=self.train_df["discourse_effectiveness"]
             )
-            positions.name = "idxs"
-            positions = positions.reset_index()
-
-            grouped = grouped.merge(positions, on="essay_id", how="left")
-            grouped["text"] = [g[0] for g in grouped["text"]]
-
-            self.ds = Dataset.from_pandas(grouped)
 
             self.ds = self.ds.map(
                 self.tokenize,
@@ -497,89 +478,23 @@ class ComparisonDataModule:
     def tokenize(self, example):
 
         text = example["text"]
-        chunks = []
-        labels = []
-        prev = 0
+        discourse_type = example["discourse_type"]
 
-        zipped = zip(
-            example["idxs"],
-            example["discourse_type"],
-            example["discourse_effectiveness"],
-        )
-        for idxs, disc_type, disc_effect in zipped:
-            if idxs == [-1]:
-                continue
+        filtered = self.reserved_df[self.reserved_df.discourse_type == discourse_type]
 
-            s, e = idxs
+        random_3 = filtered.sample(n=3)
 
-            if s != prev:
-                chunks.append(text[prev:s])
-                prev = s
+        sep = self.tokenizer.sep_token
 
-            if s == prev:
-                chunks.append(self.cls_tokens_map[disc_type])
-                chunks.append(text[s:e])
-                chunks.append(self.end_tokens_map[disc_type])
-            prev = e
-
-            labels.append(self.label2idx[disc_effect])
+        input_ = sep.join([text] + random_3.text.tolist())
 
         tokenized = self.tokenizer(
-            " ".join(chunks),
+            input_,
             padding=False,
             truncation=True,
-            max_length=self.cfg["max_length"],
-            add_special_tokens=True,
+            max_length=self.cfg["max_length"]
         )
 
-        # at this point, labels is not the same shape as input_ids.
-        # The following loop will add -100 so that the loss function
-        # ignores all tokens except CLS tokens.
-        # if average_span_preds is True, then all tokens in a span will
-        # be labeled, including CLS and END token
-
-        # idx for labels list
-        idx = 0
-        final_labels = []
-        in_span = False
-        cls_ids = set(self.cls_id_map.values())
-        end_ids = set(self.end_id_map.values())
-
-        # indicator will be for identifying spans later
-        indicator = []
-        for id_ in tokenized["input_ids"]:
-            new_label = -100
-
-            # if this id belongs to a CLS token
-            if id_ in cls_ids:
-                new_label = labels[idx]
-                in_span = True
-                indicator.append(idx)
-
-            # if this id belongs to a END token
-            elif id_ in end_ids:
-                # When averaging over a span, all tokens in the span
-                # will have the same label
-                if self.cfg["average_span_preds"]:
-                    new_label = labels[idx]
-                indicator.append(idx)
-                in_span = False
-                idx += 1
-
-            # every token in a span should have the same label
-            elif in_span:
-                # When averaging over a span, all tokens in the span
-                # will have the same label
-                if self.cfg["average_span_preds"]:
-                    new_label = labels[idx]
-                indicator.append(idx)
-            else:
-                # -100 will be ignored by loss function
-                indicator.append(-100)
-
-            final_labels.append(new_label)
-
-        tokenized["labels"] = final_labels
-        tokenized["indicator"] = indicator
+        tokenized["label"] = self.label2idx[example["discourse_effectiveness"]]
 
         return tokenized

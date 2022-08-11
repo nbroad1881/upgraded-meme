@@ -330,7 +330,7 @@ def create_model_card(config, metrics, wandb_run_id):
     )
 
     
-def compute_metrics(predictions, indicators, average_span_preds):
+def compute_metrics_token(predictions, indicators, average_span_preds):
     
     
     preds, labels = predictions
@@ -366,4 +366,15 @@ def compute_metrics(predictions, indicators, average_span_preds):
         
     return {
         "logloss": log_loss(np.array(true_labels), softmax(np.vstack(avg_preds), axis=-1))
+    }
+
+
+def compute_metrics_seq(predictions):
+    
+    preds, labels = predictions
+
+    preds = preds.argmax(-1).squeeze()
+        
+    return {
+        "logloss": log_loss(np.array(labels), np.array(preds))
     }
