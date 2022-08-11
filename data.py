@@ -11,6 +11,7 @@ from typing import Any, Optional, Tuple
 import pandas as pd
 from sklearn.model_selection import (
     KFold,
+    StratifiedKFold,
     train_test_split,
 )
 from transformers import (
@@ -440,6 +441,12 @@ class ComparisonDataModule:
             self.train_df = train_df.merge(text_df, on="essay_id", how="left")
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.cfg["model_name_or_path"])
+        
+        self.tokenizer.add_tokens([f"[{label}]" for label in self.label2idx.keys()])
+        self.cls_ids = [
+            self.tokenizer(f"[{label}]", add_special_tokens=False)[0]
+            for label in self.label2idx.keys() 
+        ]
 
     def prepare_datasets(self):
 
@@ -450,8 +457,16 @@ class ComparisonDataModule:
             # only look at discourse_text
 
             self.train_df, self.reserved_df = train_test_split(
-                self.train_df, test_size=0.1, stratify=self.train_df["discourse_effectiveness"]
+                self.train_df, test_size=0.05, stratify=self.train_df["discourse_effectiveness"]
             )
+            
+            self.train_df["fold"] = -1
+            
+            skf = StratifiedKFold(self.cfg["k_folds"])
+            
+            self.fold_idxs = [val_idx for _, val_idx in skf.split(self.train_df, y=self.train_df["discourse_effectiveness"])]
+            
+            self.ds = Dataset.from_pandas(self.train_df)
 
             self.ds = self.ds.map(
                 self.tokenize,
@@ -464,7 +479,6 @@ class ComparisonDataModule:
 
             print("Saving dataset to disk:", self.cfg["output"])
 
-        self.fold_idxs = get_folds(self.ds["labels"])
 
     def get_train_dataset(self, fold):
         idxs = list(chain(*[i for f, i in enumerate(self.fold_idxs) if f != fold]))
@@ -477,16 +491,21 @@ class ComparisonDataModule:
 
     def tokenize(self, example):
 
-        text = example["text"]
+        text = example["discourse_text"]
         discourse_type = example["discourse_type"]
 
         filtered = self.reserved_df[self.reserved_df.discourse_type == discourse_type]
 
-        random_3 = filtered.sample(n=3)
-
-        sep = self.tokenizer.sep_token
-
-        input_ = sep.join([text] + random_3.text.tolist())
+        eff_types = ["Adequate", "Ineffective", "Effective"]
+        randoms = {}
+        for e in eff_types:
+            randoms[e] = filtered[filtered.discourse_effectiveness == e].sample(n=1)
+        
+        eff_tokens = {e: f"[{e}]" for e in eff_types}
+        
+        input_ = text
+        for e in eff_types:
+            input_ += " " + eff_tokens[e] + randoms[e].discourse_text.item()
 
         tokenized = self.tokenizer(
             input_,

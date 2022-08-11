@@ -111,7 +111,7 @@ if __name__ == "__main__":
         )
         model_config.update(
             {
-                "num_labels": 1,
+                "num_labels": 3,
                 "output_dropout_prob": cfg["dropout"],
                 # "attention_probs_dropout_prob": 0.0,
                 # "hidden_dropout_prob": 0.0,
@@ -125,6 +125,8 @@ if __name__ == "__main__":
         model = AutoModelForSequenceClassification.from_pretrained(
             cfg["model_name_or_path"], config=model_config
         )
+        
+        model.resize_token_embeddings(len(dm.tokenizer))
 
         # reinit_model_weights(model, cfg["reinit_layers"], model_config)
 

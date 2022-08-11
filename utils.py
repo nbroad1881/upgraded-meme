@@ -372,9 +372,7 @@ def compute_metrics_token(predictions, indicators, average_span_preds):
 def compute_metrics_seq(predictions):
     
     preds, labels = predictions
-
-    preds = preds.argmax(-1).squeeze()
         
     return {
-        "logloss": log_loss(np.array(labels), np.array(preds))
+        "logloss": log_loss(np.array(labels), softmax(preds, axis=-1))
     }
