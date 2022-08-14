@@ -376,3 +376,36 @@ def compute_metrics_seq(predictions):
     return {
         "logloss": log_loss(np.array(labels), softmax(preds, axis=-1))
     }
+
+
+def compute_metrics_comparison(predictions, ids):
+    """
+    Averages across 5 comparisons.
+    """
+    
+    preds, labels = predictions
+    
+    temp_df = pd.DataFrame({
+        "labels": labels,
+        "ids": ids
+    })
+    
+    label_df = temp_df.drop_duplicates()
+    
+    preds = softmax(preds, axis=-1)
+        
+    temp_df["p0"] = preds[:, 0]
+    temp_df["p1"] = preds[:, 1]
+    temp_df["p2"] = preds[:, 2]
+    
+    grouped = temp_df.groupby("ids", as_index=False).mean().drop(columns=["labels"])
+    
+    grouped = grouped.merge(label_df, on="ids", how="left")
+    
+    labels = grouped.labels.values
+    preds = grouped[["p0", "p1", "p2"]].values
+    
+        
+    return {
+        "logloss": log_loss(labels, preds)
+    }
