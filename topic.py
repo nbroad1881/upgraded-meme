@@ -58,8 +58,13 @@ def parse_args():
 if __name__ == "__main__":
 
     args = parse_args()
-
-    model_name = args.model_name
+    
+    if hasattr(args, "roberta"):
+        model_name = args.roberta
+    elif hasattr(args, "minilm"):
+        model_name = args.minilm
+    elif hasattr(args, "mpnet"):
+        model_name = args.mpnet
 
     if model_name.startswith("sentence-transformers/"):
         model_name = model_name[len("sentence-transformers/") :]
