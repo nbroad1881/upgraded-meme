@@ -6,3 +6,4 @@ wandb
 kaggle
 bitsandbytes
 sentencepiece
+bertopic
