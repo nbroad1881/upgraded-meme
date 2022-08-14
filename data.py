@@ -11,7 +11,7 @@ from typing import Any, Optional, Tuple
 import pandas as pd
 from sklearn.model_selection import (
     KFold,
-    StratifiedKFold,
+    StratifiedGroupKFold,
     train_test_split,
 )
 from transformers import (
@@ -422,9 +422,11 @@ class ComparisonDataModule:
             self.ds = load_from_disk((f"{self.cfg['output']}.dataset"))
 
         else:
-            train_df = pd.read_csv(self.data_dir / "train.csv")
+            full_train_df = pd.read_csv(self.data_dir / "train.csv")
+            topics_df = pd.read_csv("topics.csv")
+            full_train_df = full_train_df.merge(topics_df, on="essay_id", how="left")
 
-            text_ds = Dataset.from_dict({"essay_id": train_df.essay_id.unique()})
+            text_ds = Dataset.from_dict({"essay_id": full_train_df.essay_id.unique()})
 
             text_ds = text_ds.map(
                 partial(read_text_files, data_dir=self.data_dir),
@@ -434,18 +436,18 @@ class ComparisonDataModule:
 
             text_df = text_ds.to_pandas()
 
-            train_df["discourse_text"] = [
-                resolve_encodings_and_normalize(x) for x in train_df["discourse_text"]
+            full_train_df["discourse_text"] = [
+                resolve_encodings_and_normalize(x) for x in full_train_df["discourse_text"]
             ]
 
-            self.train_df = train_df.merge(text_df, on="essay_id", how="left")
+            self.full_train_df = full_train_df.merge(text_df, on="essay_id", how="left")
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.cfg["model_name_or_path"])
-        
+
         self.tokenizer.add_tokens([f"[{label}]" for label in self.label2idx.keys()])
         self.cls_ids = [
             self.tokenizer(f"[{label}]", add_special_tokens=False)[0]
-            for label in self.label2idx.keys() 
+            for label in self.label2idx.keys()
         ]
 
     def prepare_datasets(self):
@@ -457,28 +459,61 @@ class ComparisonDataModule:
             # only look at discourse_text
 
             self.train_df, self.reserved_df = train_test_split(
-                self.train_df, test_size=0.05, stratify=self.train_df["discourse_effectiveness"]
+                self.full_train_df,
+                test_size=0.05,
+                stratify=self.full_train_df["discourse_effectiveness"],
             )
-            
+
             self.train_df["fold"] = -1
+            self.train_df = self.train_df.reset_index(drop=True)
+
+            skf = StratifiedGroupKFold(self.cfg["k_folds"])
+
+            # Stratify on discourse effectiveness (balanced levels of adequate, ineffective, effective)
+            # group by essay id (no leaks within one essay)
+            self.fold_idxs = [
+                val_idx
+                for _, val_idx in skf.split(
+                    self.train_df,
+                    y=self.train_df["discourse_effectiveness"],
+                    groups=self.train_df.essay_id,
+                )
+            ]
             
-            skf = StratifiedKFold(self.cfg["k_folds"])
-            
-            self.fold_idxs = [val_idx for _, val_idx in skf.split(self.train_df, y=self.train_df["discourse_effectiveness"])]
-            
+            for f, idxs in enumerate(self.fold_idxs):
+                self.train_df.loc[idxs, "fold"] = f
+
             self.ds = Dataset.from_pandas(self.train_df)
 
             self.ds = self.ds.map(
                 self.tokenize,
-                batched=False,
+                batched=True,
                 num_proc=self.cfg["num_proc"],
                 desc="Tokenizing",
+                remove_columns=self.ds.column_names
             )
+            
+            id2num = {id_:i for i, id_ in enumerate(self.train_df["discourse_id"])}
+            
+            self.ds = self.ds.map(lambda x: {"id": id2num[x["id"]]}, num_proc=self.cfg["num_proc"])
 
             self.ds.save_to_disk(f"{self.cfg['output']}.dataset")
 
             print("Saving dataset to disk:", self.cfg["output"])
+            
+            # Making new fold idxs
+            
+        self.fold_idxs = [None]*self.cfg["k_folds"]
 
+        for idx, f in enumerate(self.ds["fold"]):
+            if self.fold_idxs[f] is None:
+                self.fold_idxs[f] = []
+
+            self.fold_idxs[f].append(idx)
+
+        if self.cfg["DEBUG"]:
+            for f in range(self.cfg["k_folds"]):
+                self.fold_idxs[f] = self.fold_idxs[f][:100]
 
     def get_train_dataset(self, fold):
         idxs = list(chain(*[i for f, i in enumerate(self.fold_idxs) if f != fold]))
@@ -489,31 +524,110 @@ class ComparisonDataModule:
         # print("Unique eval fold values:", self.raw_ds.select(idxs).unique("fold"))
         return self.ds.select(idxs)
 
-    def tokenize(self, example):
+    def tokenize(self, examples):
+        """
+        Since this returns more samples than it was passed,
+        the columns of the original will need to be removed and
+        the function will need to be run batched.
+        """
 
-        text = example["discourse_text"]
-        discourse_type = example["discourse_type"]
 
-        filtered = self.reserved_df[self.reserved_df.discourse_type == discourse_type]
+        def process_one_example(text, discourse_type, topic, discourse_effectiveness):
 
-        eff_types = ["Adequate", "Ineffective", "Effective"]
-        randoms = {}
-        for e in eff_types:
-            randoms[e] = filtered[filtered.discourse_effectiveness == e].sample(n=1)
-        
-        eff_tokens = {e: f"[{e}]" for e in eff_types}
-        
-        input_ = text
-        for e in eff_types:
-            input_ += " " + eff_tokens[e] + randoms[e].discourse_text.item()
+            # Same discourse type and topic
+            filtered = self.reserved_df[
+                (self.reserved_df.discourse_type == discourse_type)
+                & (self.reserved_df.topic == topic)
+            ]
 
-        tokenized = self.tokenizer(
-            input_,
-            padding=False,
-            truncation=True,
-            max_length=self.cfg["max_length"]
-        )
+            eff_types = ["Adequate", "Ineffective", "Effective"]
 
-        tokenized["label"] = self.label2idx[example["discourse_effectiveness"]]
+            eff_counts = {
+                e: (filtered.discourse_effectiveness == e).sum() for e in eff_types
+            }
+            
+            num_comparisons = 5
+            
+            num2take = {
+                e: min(num_comparisons, c) for e, c in eff_counts.items()
+            }
+            
+            additional = []
+            for e, num in num2take.items():
+                diff = num_comparisons - num
+                if diff > 0:
+                    temp = self.reserved_df[
+                                (self.reserved_df.discourse_type == discourse_type)
+                                & (self.reserved_df.topic != topic)
+                        & (self.reserved_df.discourse_effectiveness == e)
+                            ]
+                    
+                    additional.append(temp.sample(n=diff))
+                    
+                    
+            filtered = pd.concat([filtered] + additional, axis=0, ignore_index=True)
+                    
+                    
+           
+            # each effectiveness type gets the same number of texts
+            # equal to the number of smallest count
+            eff_texts = {
+                e: filtered[filtered.discourse_effectiveness == e]["discourse_text"]
+                .sample(n=num_comparisons)
+                .tolist()
+                for e in eff_types
+            }
 
-        return tokenized
+            eff_tokens = {e: f"[{e}]" for e in eff_types}
+
+            
+            inputs = []
+            for i in range(num_comparisons):
+                temp = ""
+                for e in eff_types:
+                    temp += " " + eff_tokens[e] + " " + eff_texts[e][i]
+                if temp != "":
+                    inputs.append(text + temp)
+            if len(inputs) == 0:
+                return None
+            tokenized = self.tokenizer(
+                inputs,
+                padding=False,
+                truncation=True,
+                max_length=self.cfg["max_length"],
+            )
+
+            tokenized["label"] = [
+                self.label2idx[discourse_effectiveness]
+            ] * len(inputs)
+
+            return tokenized
+
+        results = {"input_ids": [], "attention_mask": [], "label": [], "id": [], "fold": []}
+
+        for text, discourse_type, topic, discourse_effectiveness, id_, fold in zip(
+            examples["discourse_text"],
+            examples["discourse_type"],
+            examples["topic"],
+            examples["discourse_effectiveness"],
+            examples["discourse_id"],
+            examples["fold"]
+        ):
+
+            single_tokenized = process_one_example(
+                text=text,
+                discourse_type=discourse_type,
+                topic=topic,
+                discourse_effectiveness=discourse_effectiveness,
+            )
+            
+            if single_tokenized is None:
+                print("none")
+                continue
+
+            for key in ["input_ids", "attention_mask", "label"]:
+                results[key].extend(single_tokenized[key])
+            results["id"].extend([id_]*len(single_tokenized["label"]))
+            results["fold"].extend([fold]*len(single_tokenized["label"]))
+
+        return results
