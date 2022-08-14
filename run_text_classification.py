@@ -24,6 +24,7 @@ from utils import (
     create_optimizer,
     create_scheduler,
     compute_metrics_seq,
+    compute_metrics_comparison,
     push_to_hub,
 )
 from data import (
@@ -37,9 +38,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune on AI4Code dataset")
     parser.add_argument(
-        "--config_file",
+        "config_file",
         type=str,
-        required=True,
         help="Config file",
     )
     parser.add_argument(
@@ -154,7 +154,8 @@ if __name__ == "__main__":
             tokenizer=dm.tokenizer,
             callbacks=callbacks,
             # data_collator=collator,
-            compute_metrics=compute_metrics_seq,
+            # compute_metrics=compute_metrics_seq,
+            compute_metrics=partial(compute_metrics_comparison, ids=eval_dataset["id"]),
             # optimizers=(optimizer, scheduler),
         )
 
